@@ -14,6 +14,8 @@ interface Cell {
   age: number;
   variation: number;
   flash: number;
+  pulseHeight: number;
+  glowIntensity: number;
   x: number;
   y: number;
 }
@@ -31,13 +33,11 @@ interface Particle {
   color: string;
 }
 
-interface Camera {
+interface Ripple {
+  radius: number;
+  intensity: number;
   x: number;
   y: number;
-  zoom: number;
-  shakeX: number;
-  shakeY: number;
-  shakeIntensity: number;
 }
 
 function getNeighbors(x: number, y: number): [number, number][] {
@@ -52,27 +52,28 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
   const gridRef = useRef<Cell[][]>([]);
   const frontierRef = useRef<Set<string>>(new Set());
   const particlesRef = useRef<Particle[]>([]);
+  const ripplesRef = useRef<Ripple[]>([]);
   const lastGrowRef = useRef(0);
   const timeRef = useRef(0);
-  const cameraRef = useRef<Camera>({ x: 0, y: 0, zoom: 1, shakeX: 0, shakeY: 0, shakeIntensity: 0 });
+  const cameraShakeRef = useRef({ x: 0, y: 0, intensity: 0 });
   const tileCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
 
   const currentBiome = useGardenStore((s) => s.currentBiome);
   const isPlaying = useGardenStore((s) => s.isPlaying);
-  const sensitivity = useGardenStore((s) => s.settings.sensitivity);
+  const settings = useGardenStore((s) => s.settings);
 
-  // Initialize grid
+  // Init grid
   useEffect(() => {
     const grid: Cell[][] = [];
     for (let y = 0; y < GRID_SIZE; y++) {
       grid[y] = [];
       for (let x = 0; x < GRID_SIZE; x++) {
-        grid[y][x] = { type: -1, age: 0, variation: Math.random(), flash: 0, x, y };
+        grid[y][x] = { type: -1, age: 0, variation: Math.random(), flash: 0, pulseHeight: 0, glowIntensity: 0, x, y };
       }
     }
     const cx = Math.floor(GRID_SIZE / 2);
     const cy = Math.floor(GRID_SIZE / 2);
-    grid[cy][cx] = { type: 0, age: 1, variation: Math.random(), flash: 1, x: cx, y: cy };
+    grid[cy][cx] = { type: 0, age: 1, variation: Math.random(), flash: 1, pulseHeight: 0, glowIntensity: 0, x: cx, y: cy };
 
     const frontier = new Set<string>();
     getNeighbors(cx, cy).forEach(([nx, ny]) => frontier.add(`${nx},${ny}`));
@@ -81,8 +82,9 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
     frontierRef.current = frontier;
     lastGrowRef.current = 0;
     particlesRef.current = [];
+    ripplesRef.current = [];
     timeRef.current = 0;
-    cameraRef.current = { x: 0, y: 0, zoom: 1, shakeX: 0, shakeY: 0, shakeIntensity: 0 };
+    cameraShakeRef.current = { x: 0, y: 0, intensity: 0 };
     tileCacheRef.current.clear();
   }, [currentBiome]);
 
@@ -102,7 +104,6 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
     }
   }, []);
 
-  // Pre-render a tile face to offscreen canvas
   const getTileFace = useCallback((biomeName: BiomeName, typeIdx: number, face: 'top' | 'left' | 'right') => {
     const key = `${biomeName}-${typeIdx}-${face}`;
     const cache = tileCacheRef.current;
@@ -122,7 +123,6 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
     let hlColor = tile.highlight;
     let shColor = tile.shadow;
 
-    // Face-specific lighting
     if (face === 'left') {
       baseColor = shColor;
       hlColor = tile.color;
@@ -133,7 +133,6 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
       shColor = tile.shadow;
     }
 
-    // Draw pixel pattern
     const pat = tile.pattern || [[1,1,1,1],[1,1,1,1],[1,1,1,1],[1,1,1,1]];
     const pxSize = size / 4;
     for (let py = 0; py < 4; py++) {
@@ -167,25 +166,62 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
       const frontier = frontierRef.current;
       const biome = BIOMES[currentBiome];
       const tiles = biome.tiles;
-      const camera = cameraRef.current;
+      const shake = cameraShakeRef.current;
 
-      // === BEAT & GROWTH ===
-      const beat = (audioData as any).beat === true;
-      const totalEnergy = (audioData.bass * 1.5 + audioData.lowMids + audioData.highMids * 0.5 + audioData.treble * 0.3) * sensitivity;
-      const growAmount = totalEnergy * 0.12;
+      const { sensitivity, kickReactivity, snareReactivity, animationSpeed } = settings;
 
-      if (beat) {
-        camera.shakeIntensity = Math.min(camera.shakeIntensity + audioData.bass * 8, 6);
+      // === BEAT REACTIONS ===
+      if (audioData.kick) {
+        shake.intensity = Math.min(shake.intensity + audioData.kickEnergy * 10 * kickReactivity, 8);
+        // Pulse all existing cells
+        for (let y = 0; y < GRID_SIZE; y++) {
+          for (let x = 0; x < GRID_SIZE; x++) {
+            const cell = grid[y][x];
+            if (cell.type !== -1) {
+              const distFromCenter = Math.sqrt((x - GRID_SIZE/2)**2 + (y - GRID_SIZE/2)**2);
+              const delay = distFromCenter * 0.03;
+              cell.pulseHeight = Math.max(cell.pulseHeight, audioData.kickEnergy * kickReactivity * (1 - delay * 0.1));
+            }
+          }
+        }
+        // Spawn ripple
+        ripplesRef.current.push({ radius: 0, intensity: audioData.kickEnergy * kickReactivity, x: GRID_SIZE/2, y: GRID_SIZE/2 });
       }
-      camera.shakeIntensity *= 0.92;
-      camera.shakeX = (Math.random() - 0.5) * camera.shakeIntensity;
-      camera.shakeY = (Math.random() - 0.5) * camera.shakeIntensity;
+
+      if (audioData.snare) {
+        // Glow burst on all cells
+        for (let y = 0; y < GRID_SIZE; y++) {
+          for (let x = 0; x < GRID_SIZE; x++) {
+            const cell = grid[y][x];
+            if (cell.type !== -1) {
+              cell.glowIntensity = Math.max(cell.glowIntensity, audioData.snareEnergy * snareReactivity);
+            }
+          }
+        }
+      }
+
+      // Decay animations
+      for (let y = 0; y < GRID_SIZE; y++) {
+        for (let x = 0; x < GRID_SIZE; x++) {
+          const cell = grid[y][x];
+          cell.pulseHeight *= 0.92;
+          cell.glowIntensity *= 0.94;
+        }
+      }
+
+      // Update camera shake
+      shake.intensity *= 0.9;
+      shake.x = (Math.random() - 0.5) * shake.intensity;
+      shake.y = (Math.random() - 0.5) * shake.intensity;
+
+      // === GROWTH ===
+      const totalEnergy = (audioData.bass * 1.5 + audioData.lowMids + audioData.highMids * 0.5 + audioData.treble * 0.3) * sensitivity;
+      const growAmount = totalEnergy * 0.1;
 
       if (isPlaying && frontier.size > 0) {
         lastGrowRef.current += growAmount;
 
-        // Beat burst: grow extra cells on strong beats
-        const burstCount = beat ? Math.floor(2 + audioData.bass * 4) : 0;
+        const burstCount = audioData.kick ? Math.floor(2 + audioData.kickEnergy * 5 * kickReactivity) : 0;
         const cellsToGrow = burstCount + (lastGrowRef.current >= 1 ? 1 : 0);
         if (lastGrowRef.current >= 1) lastGrowRef.current -= 1;
 
@@ -206,7 +242,10 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
           if (audioData.bass > 0.8 && Math.random() > 0.7) typeIdx = Math.max(typeIdx - 1, 0);
 
           grid[fy][fx] = {
-            type: typeIdx, age: 1, variation: Math.random(), flash: 1, x: fx, y: fy,
+            type: typeIdx, age: 1, variation: Math.random(), flash: 1,
+            pulseHeight: audioData.kick ? audioData.kickEnergy * kickReactivity * 0.5 : 0,
+            glowIntensity: audioData.snare ? audioData.snareEnergy * snareReactivity * 0.5 : 0,
+            x: fx, y: fy,
           };
 
           if (typeIdx >= 2) {
@@ -220,7 +259,7 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
         }
       }
 
-      // Update cells
+      // Update cell ages
       for (let y = 0; y < GRID_SIZE; y++) {
         for (let x = 0; x < GRID_SIZE; x++) {
           const cell = grid[y][x];
@@ -229,6 +268,15 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
             if (cell.flash > 0) cell.flash -= 0.025;
           }
         }
+      }
+
+      // Update ripples
+      const ripples = ripplesRef.current;
+      for (let i = ripples.length - 1; i >= 0; i--) {
+        const r = ripples[i];
+        r.radius += 0.8 * animationSpeed;
+        r.intensity *= 0.95;
+        if (r.intensity < 0.01) ripples.splice(i, 1);
       }
 
       // Update particles
@@ -271,7 +319,7 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      // Background with frequency-reactive colour shifts
+      // Sky with frequency reactivity
       const skyGrad = ctx.createLinearGradient(0, 0, 0, displayH);
       const bassWarmth = Math.floor(audioData.bass * 30);
       const trebleCool = Math.floor(audioData.treble * 20);
@@ -281,16 +329,14 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
       ctx.fillStyle = skyGrad;
       ctx.fillRect(0, 0, displayW, displayH);
 
-      // Calculate isometric projection parameters
-      // Fit the diamond grid into the viewport
+      // Isometric projection
       const diamondW = GRID_SIZE;
-      const diamondH = GRID_SIZE;
-      const tileW = Math.min(displayW / (diamondW * 1.05), displayH / (diamondH * 0.6)) * camera.zoom;
+      const tileW = Math.min(displayW / (diamondW * 1.05), displayH / (diamondW * 0.6)) * 1.0;
       const tileH = tileW * 0.5;
-      const centerX = displayW / 2 + camera.shakeX;
-      const centerY = displayH / 2 + camera.shakeY + tileH * 2;
+      const centerX = displayW / 2 + shake.x;
+      const centerY = displayH / 2 + shake.y + tileH * 2;
 
-      // Collect visible cells and sort back-to-front
+      // Collect visible cells
       const renderList: { cell: Cell; sx: number; sy: number }[] = [];
       for (let y = 0; y < GRID_SIZE; y++) {
         for (let x = 0; x < GRID_SIZE; x++) {
@@ -301,8 +347,6 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
           renderList.push({ cell, sx, sy });
         }
       }
-
-      // Sort back-to-front (lower y first, then lower x)
       renderList.sort((a, b) => {
         if (a.cell.y !== b.cell.y) return a.cell.y - b.cell.y;
         return a.cell.x - b.cell.x;
@@ -312,10 +356,13 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
       for (const { cell, sx, sy } of renderList) {
         const tile = tiles[cell.type];
         if (!tile) continue;
-        const h = tile.height;
-        const hPx = h * tileH * 0.8;
 
-        // Side faces (left and right)
+        // Animated height: base + pulse + idle breathing
+        const idleBreath = Math.sin(t * 2 * animationSpeed + cell.variation * 10) * 0.15;
+        const h = tile.height + cell.pulseHeight + idleBreath * (tile.height > 0 ? 1 : 0);
+        const hPx = Math.max(0, h * tileH * 0.8);
+
+        // Side faces
         if (h > 0) {
           const leftFace = getTileFace(currentBiome, cell.type, 'left');
           const rightFace = getTileFace(currentBiome, cell.type, 'right');
@@ -362,35 +409,55 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
           drawIsoTile(ctx, sx, sy - hPx, tileW, tileH);
         }
 
-        // Glow for special tiles
-        if (tile.glow && cell.age > 0.5) {
-          const bloom = useGardenStore.getState().settings.bloom;
-          const pulse = Math.sin(t * 3 + cell.variation * 10) * 0.3 + 0.7;
-          ctx.shadowColor = tile.glow;
-          ctx.shadowBlur = 12 * pulse * bloom;
-          ctx.fillStyle = tile.glow;
-          ctx.globalAlpha = 0.12 * pulse;
+        // Glow with animation reactivity
+        if ((tile.glow || cell.glowIntensity > 0.05) && cell.age > 0.3) {
+          const bloom = settings.bloom;
+          const idlePulse = Math.sin(t * 3 * animationSpeed + cell.variation * 10) * 0.3 + 0.7;
+          const totalGlow = Math.max(idlePulse * 0.3, cell.glowIntensity);
+          ctx.shadowColor = tile.glow || biome.accentColor;
+          ctx.shadowBlur = 12 * totalGlow * bloom;
+          ctx.fillStyle = tile.glow || biome.accentColor;
+          ctx.globalAlpha = 0.12 * totalGlow;
           drawIsoTile(ctx, sx, sy - hPx, tileW * 1.1, tileH * 1.1);
           ctx.globalAlpha = 1;
           ctx.shadowBlur = 0;
         }
       }
 
-      // Render particles in world space
+      // Render ripples
+      for (const r of ripples) {
+        for (let y = 0; y < GRID_SIZE; y++) {
+          for (let x = 0; x < GRID_SIZE; x++) {
+            const cell = grid[y][x];
+            if (cell.type === -1) continue;
+            const dist = Math.sqrt((x - r.x)**2 + (y - r.y)**2);
+            const diff = Math.abs(dist - r.radius);
+            if (diff < 2.5) {
+              const sx = (x - y) * tileW / 2 + centerX;
+              const sy = (x + y) * tileH / 2 + centerY;
+              const intensity = r.intensity * (1 - diff / 2.5);
+              ctx.fillStyle = `rgba(255,255,255,${intensity * 0.3})`;
+              drawIsoTile(ctx, sx, sy, tileW * 1.05, tileH * 1.05);
+            }
+          }
+        }
+      }
+
+      // Render particles
       for (const p of particles) {
         const psx = (p.x - p.y) * tileW / 2 + centerX;
         const psy = (p.x + p.y) * tileH / 2 + centerY - p.z * tileH * 0.8;
         const alpha = Math.max(0, p.life / p.maxLife);
         ctx.globalAlpha = alpha;
         ctx.fillStyle = p.color;
-        const ps = p.size * camera.zoom;
+        const ps = p.size;
         ctx.fillRect(psx - ps / 2, psy - ps / 2, ps, ps);
       }
       ctx.globalAlpha = 1;
 
-      // Beat flash overlay
-      if (beat) {
-        ctx.fillStyle = `rgba(255,255,255,${audioData.bass * 0.08})`;
+      // Kick flash overlay
+      if (audioData.kick) {
+        ctx.fillStyle = `rgba(255,255,255,${audioData.kickEnergy * 0.06})`;
         ctx.fillRect(0, 0, displayW, displayH);
       }
 
@@ -409,7 +476,7 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [currentBiome, isPlaying, audioData, sensitivity, spawnParticles, getTileFace]);
+  }, [currentBiome, isPlaying, audioData, settings, spawnParticles, getTileFace]);
 
   return (
     <canvas

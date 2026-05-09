@@ -500,6 +500,57 @@ canvas {
   transform: scale(1.05);
 }
 
+/* ===== BEAT INDICATORS ===== */
+.beat-indicators {
+  display: flex;
+  gap: 12px;
+}
+
+.beat-dot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  flex: 1;
+}
+
+.beat-label {
+  font-size: 0.7rem;
+  color: rgba(150, 150, 220, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.beat-light {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: rgba(100, 100, 120, 0.3);
+  transition: all 0.05s ease;
+}
+
+.beat-dot.kick .beat-light {
+  background: rgba(255, 80, 80, 0.3);
+}
+
+.beat-dot.kick.flash .beat-light {
+  background: #ff5050;
+  box-shadow: 0 0 12px rgba(255, 80, 80, 0.8);
+}
+
+.beat-dot.snare .beat-light {
+  background: rgba(80, 200, 255, 0.3);
+}
+
+.beat-dot.snare.flash .beat-light {
+  background: #50c8ff;
+  box-shadow: 0 0 12px rgba(80, 200, 255, 0.8);
+}
+
+/* ===== MOBILE OPTIMIZATIONS ===== */
 .poster-actions {
   position: absolute;
   bottom: 12px;

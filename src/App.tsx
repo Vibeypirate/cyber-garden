@@ -76,6 +76,7 @@ function App() {
       {!posterMode && (
         <UI
           isUploading={isUploading}
+          audioData={audioData}
           onUpload={handleUpload}
           onMicrophone={async () => {
             setAudioSource('microphone');

@@ -4,7 +4,10 @@ export interface AudioData {
   highMids: number;
   treble: number;
   average: number;
-  beat?: boolean;
+  kick: boolean;
+  snare: boolean;
+  kickEnergy: number;
+  snareEnergy: number;
 }
 
 export type AudioSource = 'file' | 'microphone' | 'demo' | null;
@@ -17,14 +20,14 @@ export interface TileDef {
   highlight: string;
   shadow: string;
   glow?: string;
-  height: number; // voxel height in tile units
+  height: number;
   pattern?: number[][];
 }
 
 export interface Biome {
   name: string;
   voidColor: string;
-  skyGradient: [string, string, string]; // top, middle, bottom
+  skyGradient: [string, string, string];
   tiles: TileDef[];
   particleColor: string;
   accentColor: string;
@@ -97,6 +100,10 @@ export interface GardenSettings {
   bloom: number;
   cameraMotion: number;
   particleAmount: number;
+  beatSensitivity: number;    // 0.1-2.0
+  kickReactivity: number;     // 0-3.0
+  snareReactivity: number;    // 0-3.0
+  animationSpeed: number;     // 0.1-3.0
 }
 
 export const DEFAULT_SETTINGS: GardenSettings = {
@@ -104,6 +111,10 @@ export const DEFAULT_SETTINGS: GardenSettings = {
   bloom: 1.0,
   cameraMotion: 0.5,
   particleAmount: 1.0,
+  beatSensitivity: 1.0,
+  kickReactivity: 1.0,
+  snareReactivity: 1.0,
+  animationSpeed: 1.0,
 };
 
 export interface SongInfo {

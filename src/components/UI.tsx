@@ -1,7 +1,7 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { useGardenStore } from '../store';
 import { BIOMES } from '../types';
-import type { BiomeName } from '../types';
+import type { BiomeName, AudioData } from '../types';
 
 interface UIProps {
   onUpload: (file: File) => void;
@@ -11,9 +11,10 @@ interface UIProps {
   onReset: () => void;
   onRemoveSong: () => void;
   isUploading: boolean;
+  audioData: AudioData;
 }
 
-export default function UI({ onUpload, onMicrophone, onDemo, onPauseResume, onReset, onRemoveSong, isUploading }: UIProps) {
+export default function UI({ onUpload, onMicrophone, onDemo, onPauseResume, onReset, onRemoveSong, isUploading, audioData }: UIProps) {
   const [uiVisible, setUiVisible] = useState(true);
   const [panelVisible, setPanelVisible] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -215,6 +216,21 @@ export default function UI({ onUpload, onMicrophone, onDemo, onPauseResume, onRe
                 </button>
               </div>
             </div>
+
+            {/* Beat indicators */}
+            <div className="ui-section">
+              <span className="ui-label">Beat Detection</span>
+              <div className="beat-indicators">
+                <div className={`beat-dot kick ${audioData.kick ? 'flash' : ''}`}>
+                  <span className="beat-label">Kick</span>
+                  <div className="beat-light" />
+                </div>
+                <div className={`beat-dot snare ${audioData.snare ? 'flash' : ''}`}>
+                  <span className="beat-label">Snare</span>
+                  <div className="beat-light" />
+                </div>
+              </div>
+            </div>
           </>
         )}
 
@@ -234,6 +250,58 @@ export default function UI({ onUpload, onMicrophone, onDemo, onPauseResume, onRe
             </div>
 
             <div className="ui-section">
+              <span className="ui-label">Beat Sensitivity</span>
+              <input
+                className="ui-slider"
+                type="range"
+                min={0.1}
+                max={2}
+                step={0.1}
+                value={settings.beatSensitivity}
+                onChange={(e) => updateSettings({ beatSensitivity: parseFloat(e.target.value) })}
+              />
+            </div>
+
+            <div className="ui-section">
+              <span className="ui-label">Kick Reactivity</span>
+              <input
+                className="ui-slider"
+                type="range"
+                min={0}
+                max={3}
+                step={0.1}
+                value={settings.kickReactivity}
+                onChange={(e) => updateSettings({ kickReactivity: parseFloat(e.target.value) })}
+              />
+            </div>
+
+            <div className="ui-section">
+              <span className="ui-label">Snare Reactivity</span>
+              <input
+                className="ui-slider"
+                type="range"
+                min={0}
+                max={3}
+                step={0.1}
+                value={settings.snareReactivity}
+                onChange={(e) => updateSettings({ snareReactivity: parseFloat(e.target.value) })}
+              />
+            </div>
+
+            <div className="ui-section">
+              <span className="ui-label">Animation Speed</span>
+              <input
+                className="ui-slider"
+                type="range"
+                min={0.1}
+                max={3}
+                step={0.1}
+                value={settings.animationSpeed}
+                onChange={(e) => updateSettings({ animationSpeed: parseFloat(e.target.value) })}
+              />
+            </div>
+
+            <div className="ui-section">
               <span className="ui-label">Bloom / Glow</span>
               <input
                 className="ui-slider"
@@ -243,19 +311,6 @@ export default function UI({ onUpload, onMicrophone, onDemo, onPauseResume, onRe
                 step={0.1}
                 value={settings.bloom}
                 onChange={(e) => updateSettings({ bloom: parseFloat(e.target.value) })}
-              />
-            </div>
-
-            <div className="ui-section">
-              <span className="ui-label">Growth Speed</span>
-              <input
-                className="ui-slider"
-                type="range"
-                min={0.1}
-                max={2}
-                step={0.1}
-                value={settings.cameraMotion}
-                onChange={(e) => updateSettings({ cameraMotion: parseFloat(e.target.value) })}
               />
             </div>
 

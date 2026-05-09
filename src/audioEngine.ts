@@ -6,17 +6,21 @@ export class AudioEngine {
   private source: AudioBufferSourceNode | MediaStreamAudioSourceNode | OscillatorNode | null = null;
   private gainNode: GainNode | null = null;
   private dataArray: Uint8Array = new Uint8Array(0);
-  private smoothData: AudioData = { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0 };
-  private smoothing = 0.82;
+  private smoothData: AudioData = { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0, kick: false, snare: false, kickEnergy: 0, snareEnergy: 0 };
+  private smoothing = 0.78;
   private isPlaying = false;
   private isSuspended = false;
   private demoOscillators: OscillatorNode[] = [];
   private demoGains: GainNode[] = [];
   private currentMode: 'file' | 'microphone' | 'demo' | null = null;
   private lastFile: File | null = null;
-  private beatThreshold = 0.55;
-  private lastBass = 0;
-  private beatCooldown = 0;
+
+  // Beat detection history ring buffers
+  private bassHistory: number[] = new Array(20).fill(0);
+  private snareHistory: number[] = new Array(20).fill(0);
+  private historyIdx = 0;
+  private kickCooldown = 0;
+  private snareCooldown = 0;
 
   getContext() {
     if (!this.ctx) {
@@ -44,13 +48,13 @@ export class AudioEngine {
     if (!this.analyser) {
       this.analyser = ctx.createAnalyser();
       this.analyser.fftSize = 2048;
-      this.analyser.smoothingTimeConstant = 0.5;
+      this.analyser.smoothingTimeConstant = 0.4;
       const bufferLength = this.analyser.frequencyBinCount;
       this.dataArray = new Uint8Array(bufferLength);
     }
   }
 
-  private getFrequencyData(): AudioData {
+  private getFrequencyData(): Omit<AudioData, 'kick' | 'snare' | 'kickEnergy' | 'snareEnergy'> {
     if (!this.analyser) return { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0 };
     (this.analyser as any).getByteFrequencyData(this.dataArray);
 
@@ -71,13 +75,62 @@ export class AudioEngine {
       return count > 0 ? sum / count / 255 : 0;
     };
 
-    const bass = getBand(20, 150);
-    const lowMids = getBand(150, 500);
-    const highMids = getBand(500, 2000);
-    const treble = getBand(2000, 8000);
+    const bass = getBand(20, 120);      // Kick/808 zone
+    const lowMids = getBand(120, 500);   // Bass guitar
+    const highMids = getBand(500, 4000); // Snare/vocals
+    const treble = getBand(4000, 12000); // Hihats/cymbals
     const average = (bass + lowMids + highMids + treble) / 4;
 
     return { bass, lowMids, highMids, treble, average };
+  }
+
+  private detectBeats(raw: { bass: number; highMids: number }): { kick: boolean; snare: boolean; kickEnergy: number; snareEnergy: number } {
+    // Update history buffers
+    this.bassHistory[this.historyIdx] = raw.bass;
+    this.snareHistory[this.historyIdx] = raw.highMids;
+    this.historyIdx = (this.historyIdx + 1) % 20;
+
+    // Decay cooldowns
+    this.kickCooldown = Math.max(0, this.kickCooldown - 1);
+    this.snareCooldown = Math.max(0, this.snareCooldown - 1);
+
+    // Compute average of last 12 samples (excluding current)
+    let bassSum = 0, snareSum = 0;
+    for (let i = 0; i < 20; i++) {
+      bassSum += this.bassHistory[i];
+      snareSum += this.snareHistory[i];
+    }
+    const bassAvg = bassSum / 20;
+    const snareAvg = snareSum / 20;
+
+    // Kick detection: current bass must be significantly above recent average
+    // AND the highest in the last few frames
+    let kick = false;
+    let kickEnergy = 0;
+    if (this.kickCooldown === 0) {
+      const bassPeak = Math.max(...this.bassHistory);
+      const dynamicThreshold = bassAvg * 1.4 + 0.08;
+      if (raw.bass >= bassPeak * 0.95 && raw.bass > dynamicThreshold && raw.bass > 0.15) {
+        kick = true;
+        kickEnergy = Math.min(1, raw.bass * 2);
+        this.kickCooldown = 8; // ~130ms at 60fps
+      }
+    }
+
+    // Snare detection: high-mid spike
+    let snare = false;
+    let snareEnergy = 0;
+    if (this.snareCooldown === 0) {
+      const snarePeak = Math.max(...this.snareHistory);
+      const snareThreshold = snareAvg * 1.5 + 0.1;
+      if (raw.highMids >= snarePeak * 0.9 && raw.highMids > snareThreshold && raw.highMids > 0.12) {
+        snare = true;
+        snareEnergy = Math.min(1, raw.highMids * 1.5);
+        this.snareCooldown = 6;
+      }
+    }
+
+    return { kick, snare, kickEnergy, snareEnergy };
   }
 
   private updateSmooth(raw: AudioData): AudioData {
@@ -88,28 +141,27 @@ export class AudioEngine {
       highMids: this.smoothData.highMids * s + raw.highMids * (1 - s),
       treble: this.smoothData.treble * s + raw.treble * (1 - s),
       average: this.smoothData.average * s + raw.average * (1 - s),
+      kick: raw.kick,
+      snare: raw.snare,
+      kickEnergy: raw.kickEnergy,
+      snareEnergy: raw.snareEnergy,
     };
     return this.smoothData;
   }
 
   getAudioData(): AudioData {
     if (!this.isPlaying || !this.analyser || this.isSuspended) {
-      return this.smoothData;
+      // Return zeros when paused — not decaying ghosts
+      return { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0, kick: false, snare: false, kickEnergy: 0, snareEnergy: 0 };
     }
+
     const raw = this.getFrequencyData();
+    const beats = this.detectBeats(raw);
 
-    // Beat detection
-    this.beatCooldown -= 0.016;
-    const bassDelta = raw.bass - this.lastBass;
-    this.lastBass = raw.bass;
-
-    (raw as any).beat = false;
-    if (raw.bass > this.beatThreshold && bassDelta > 0.08 && this.beatCooldown <= 0) {
-      (raw as any).beat = true;
-      this.beatCooldown = 0.25;
-    }
-
-    return this.updateSmooth(raw);
+    return this.updateSmooth({
+      ...raw,
+      ...beats,
+    });
   }
 
   async startMicrophone(): Promise<void> {
@@ -126,6 +178,7 @@ export class AudioEngine {
     this.source = source;
     this.isPlaying = true;
     this.isSuspended = false;
+    this._resetHistory();
   }
 
   async startFile(file: File): Promise<void> {
@@ -152,6 +205,7 @@ export class AudioEngine {
     this.source = source;
     this.isPlaying = true;
     this.isSuspended = false;
+    this._resetHistory();
   }
 
   async startDemo(): Promise<void> {
@@ -212,17 +266,19 @@ export class AudioEngine {
 
     this.isPlaying = true;
     this.isSuspended = false;
+    this._resetHistory();
   }
 
   async pause(): Promise<void> {
     if (!this.isPlaying) return;
     this.isSuspended = true;
     await this.suspendContext();
+    // Zero out smooth data immediately so visuals stop
+    this.smoothData = { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0, kick: false, snare: false, kickEnergy: 0, snareEnergy: 0 };
   }
 
   async resume(): Promise<void> {
     if (!this.isPlaying) {
-      // If not playing, restart current mode
       if (this.currentMode === 'demo') {
         await this.startDemo();
       } else if (this.currentMode === 'file' && this.lastFile) {
@@ -258,9 +314,16 @@ export class AudioEngine {
       this.gainNode = null;
     }
 
-    this.smoothData = { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0 };
-    this.lastBass = 0;
-    this.beatCooldown = 0;
+    this.smoothData = { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0, kick: false, snare: false, kickEnergy: 0, snareEnergy: 0 };
+    this._resetHistory();
+  }
+
+  private _resetHistory() {
+    this.bassHistory.fill(0);
+    this.snareHistory.fill(0);
+    this.historyIdx = 0;
+    this.kickCooldown = 0;
+    this.snareCooldown = 0;
   }
 
   isActive() {

@@ -6,6 +6,7 @@ export function useAudioEngine() {
   const engineRef = useRef<AudioEngine | null>(null);
   const [audioData, setAudioData] = useState<AudioData>({
     bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0,
+    kick: false, snare: false, kickEnergy: 0, snareEnergy: 0,
   });
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -15,7 +16,6 @@ export function useAudioEngine() {
     engineRef.current = new AudioEngine();
   }
 
-  // Poll audio data
   useEffect(() => {
     intervalRef.current = setInterval(() => {
       const data = engineRef.current!.getAudioData();
