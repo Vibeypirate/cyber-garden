@@ -6,13 +6,13 @@ import UI from './components/UI';
 import PosterMode from './components/PosterMode';
 
 function App() {
-  const audioSource = useGardenStore((s) => s.audioSource);
   const isPlaying = useGardenStore((s) => s.isPlaying);
   const posterMode = useGardenStore((s) => s.posterMode);
   const setIsPlaying = useGardenStore((s) => s.setIsPlaying);
   const setCurrentSong = useGardenStore((s) => s.setCurrentSong);
   const setAudioSource = useGardenStore((s) => s.setAudioSource);
-  const { startFile, startMicrophone, startDemo, stop, audioData, resumeContext, isUploading } = useAudioEngine();
+
+  const { startFile, startMicrophone, startDemo, pause, resumeAudio, stop, audioData, resumeContext, isUploading } = useAudioEngine();
   const initialized = useRef(false);
 
   // Auto-start demo on first load
@@ -23,27 +23,22 @@ function App() {
     }
   }, [startDemo]);
 
-  // Handle play/pause
-  useEffect(() => {
-    if (!isPlaying) {
-      stop();
-    } else if (!audioSource) {
+  const handlePauseResume = useCallback(async () => {
+    if (isPlaying) {
+      await pause();
       setIsPlaying(false);
+    } else {
+      await resumeAudio();
+      setIsPlaying(true);
     }
-  }, [isPlaying, audioSource, stop, setIsPlaying]);
+  }, [isPlaying, pause, resumeAudio, setIsPlaying]);
 
-  // Handle source changes
-  useEffect(() => {
-    if (!isPlaying) return;
-    if (audioSource === 'demo') {
-      startDemo();
-    }
-  }, [audioSource, isPlaying, startDemo]);
-
-  // Unlock audio context on first user interaction (critical for mobile)
-  const unlockAudio = useCallback(() => {
-    resumeContext();
-  }, [resumeContext]);
+  const handleReset = useCallback(async () => {
+    await stop();
+    setIsPlaying(false);
+    setAudioSource(null);
+    setCurrentSong(null);
+  }, [stop, setIsPlaying, setAudioSource, setCurrentSong]);
 
   const handleUpload = useCallback(async (file: File) => {
     setAudioSource('file');
@@ -58,6 +53,11 @@ function App() {
     setAudioSource(null);
     setIsPlaying(false);
   }, [stop, setCurrentSong, setAudioSource, setIsPlaying]);
+
+  // Unlock audio context on first user interaction (critical for mobile)
+  const unlockAudio = useCallback(() => {
+    resumeContext();
+  }, [resumeContext]);
 
   return (
     <div
@@ -89,13 +89,8 @@ function App() {
             setIsPlaying(true);
             await startDemo();
           }}
-          onPauseResume={() => setIsPlaying(!isPlaying)}
-          onReset={async () => {
-            await stop();
-            setIsPlaying(false);
-            setAudioSource(null);
-            setCurrentSong(null);
-          }}
+          onPauseResume={handlePauseResume}
+          onReset={handleReset}
           onRemoveSong={handleRemoveSong}
         />
       )}

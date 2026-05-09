@@ -7,10 +7,16 @@ export class AudioEngine {
   private gainNode: GainNode | null = null;
   private dataArray: Uint8Array = new Uint8Array(0);
   private smoothData: AudioData = { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0 };
-  private smoothing = 0.85; // Higher = smoother, lower = more reactive
+  private smoothing = 0.82;
   private isPlaying = false;
+  private isSuspended = false;
   private demoOscillators: OscillatorNode[] = [];
   private demoGains: GainNode[] = [];
+  private currentMode: 'file' | 'microphone' | 'demo' | null = null;
+  private lastFile: File | null = null;
+  private beatThreshold = 0.55;
+  private lastBass = 0;
+  private beatCooldown = 0;
 
   getContext() {
     if (!this.ctx) {
@@ -26,17 +32,22 @@ export class AudioEngine {
     }
   }
 
-  async resume() {
-    await this.resumeContext();
+  async suspendContext(): Promise<void> {
+    const ctx = this.getContext();
+    if (ctx.state === 'running') {
+      await ctx.suspend();
+    }
   }
 
   private setupAnalyser() {
     const ctx = this.getContext();
-    this.analyser = ctx.createAnalyser();
-    this.analyser.fftSize = 2048;
-    this.analyser.smoothingTimeConstant = 0.6;
-    const bufferLength = this.analyser.frequencyBinCount;
-    this.dataArray = new Uint8Array(bufferLength) as Uint8Array;
+    if (!this.analyser) {
+      this.analyser = ctx.createAnalyser();
+      this.analyser.fftSize = 2048;
+      this.analyser.smoothingTimeConstant = 0.5;
+      const bufferLength = this.analyser.frequencyBinCount;
+      this.dataArray = new Uint8Array(bufferLength);
+    }
   }
 
   private getFrequencyData(): AudioData {
@@ -57,7 +68,7 @@ export class AudioEngine {
         sum += this.dataArray[i];
         count++;
       }
-      return count > 0 ? sum / count / 255 : 0; // Normalise to 0–1
+      return count > 0 ? sum / count / 255 : 0;
     };
 
     const bass = getBand(20, 150);
@@ -69,8 +80,7 @@ export class AudioEngine {
     return { bass, lowMids, highMids, treble, average };
   }
 
-  private updateSmooth() {
-    const raw = this.getFrequencyData();
+  private updateSmooth(raw: AudioData): AudioData {
     const s = this.smoothing;
     this.smoothData = {
       bass: this.smoothData.bass * s + raw.bass * (1 - s),
@@ -83,15 +93,30 @@ export class AudioEngine {
   }
 
   getAudioData(): AudioData {
-    if (!this.isPlaying || !this.analyser) {
+    if (!this.isPlaying || !this.analyser || this.isSuspended) {
       return this.smoothData;
     }
-    return this.updateSmooth();
+    const raw = this.getFrequencyData();
+
+    // Beat detection
+    this.beatCooldown -= 0.016;
+    const bassDelta = raw.bass - this.lastBass;
+    this.lastBass = raw.bass;
+
+    (raw as any).beat = false;
+    if (raw.bass > this.beatThreshold && bassDelta > 0.08 && this.beatCooldown <= 0) {
+      (raw as any).beat = true;
+      this.beatCooldown = 0.25;
+    }
+
+    return this.updateSmooth(raw);
   }
 
   async startMicrophone(): Promise<void> {
     await this.stop();
-    await this.resume();
+    this.currentMode = 'microphone';
+    this.lastFile = null;
+    await this.resumeContext();
     this.setupAnalyser();
 
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -100,11 +125,14 @@ export class AudioEngine {
     source.connect(this.analyser!);
     this.source = source;
     this.isPlaying = true;
+    this.isSuspended = false;
   }
 
   async startFile(file: File): Promise<void> {
     await this.stop();
-    await this.resume();
+    this.currentMode = 'file';
+    this.lastFile = file;
+    await this.resumeContext();
     this.setupAnalyser();
 
     const arrayBuffer = await file.arrayBuffer();
@@ -123,11 +151,14 @@ export class AudioEngine {
     source.start(0);
     this.source = source;
     this.isPlaying = true;
+    this.isSuspended = false;
   }
 
   async startDemo(): Promise<void> {
     await this.stop();
-    await this.resume();
+    this.currentMode = 'demo';
+    this.lastFile = null;
+    await this.resumeContext();
     this.setupAnalyser();
 
     const ctx = this.getContext();
@@ -136,7 +167,6 @@ export class AudioEngine {
     this.gainNode.connect(this.analyser!);
     this.gainNode.connect(ctx.destination);
 
-    // Create multiple oscillators simulating a synthetic evolving signal
     const freqs = [55, 110, 220, 440, 880, 1760];
     const types: OscillatorType[] = ['sine', 'triangle', 'sine', 'sine', 'triangle', 'sine'];
 
@@ -163,7 +193,6 @@ export class AudioEngine {
       osc.start();
       lfo.start();
 
-      // Animate gain with another LFO for rhythmic feel
       const gainLfo = ctx.createOscillator();
       gainLfo.type = 'sine';
       gainLfo.frequency.value = 0.1 + Math.random() * 2;
@@ -182,18 +211,40 @@ export class AudioEngine {
     });
 
     this.isPlaying = true;
+    this.isSuspended = false;
+  }
+
+  async pause(): Promise<void> {
+    if (!this.isPlaying) return;
+    this.isSuspended = true;
+    await this.suspendContext();
+  }
+
+  async resume(): Promise<void> {
+    if (!this.isPlaying) {
+      // If not playing, restart current mode
+      if (this.currentMode === 'demo') {
+        await this.startDemo();
+      } else if (this.currentMode === 'file' && this.lastFile) {
+        await this.startFile(this.lastFile);
+      } else if (this.currentMode === 'microphone') {
+        await this.startMicrophone();
+      }
+      return;
+    }
+    this.isSuspended = false;
+    await this.resumeContext();
   }
 
   async stop() {
     this.isPlaying = false;
+    this.isSuspended = false;
+    this.currentMode = null;
+    this.lastFile = null;
 
     if (this.source) {
-      try {
-        if ('stop' in this.source) this.source.stop();
-      } catch (e) { /* noop */ }
-      try {
-        if ('disconnect' in this.source) this.source.disconnect();
-      } catch (e) { /* noop */ }
+      try { if ('stop' in this.source) this.source.stop(); } catch (e) {}
+      try { if ('disconnect' in this.source) this.source.disconnect(); } catch (e) {}
       this.source = null;
     }
 
@@ -208,10 +259,8 @@ export class AudioEngine {
     }
 
     this.smoothData = { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0 };
-  }
-
-  setSmoothing(val: number) {
-    this.smoothing = Math.max(0, Math.min(0.99, val));
+    this.lastBass = 0;
+    this.beatCooldown = 0;
   }
 
   isActive() {
