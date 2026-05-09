@@ -2,12 +2,12 @@ import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
-export default function Atmosphere({ color }: { color: string }) {
+export default function Atmosphere({ color, isMobile }: { color: string; isMobile: boolean }) {
   const starsRef = useRef<THREE.Points>(null);
   const mistRef = useRef<THREE.Points>(null);
 
-  const starCount = 800;
-  const mistCount = 200;
+  const starCount = isMobile ? 300 : 800;
+  const mistCount = isMobile ? 80 : 200;
 
   const starPositions = useMemo(() => {
     const arr = new Float32Array(starCount * 3);

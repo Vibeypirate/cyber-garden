@@ -17,9 +17,10 @@ import Atmosphere from './Atmosphere';
 interface SceneProps {
   audioData: AudioData;
   preset: PresetName;
+  isMobile: boolean;
 }
 
-export default function Scene({ audioData, preset }: SceneProps) {
+export default function Scene({ audioData, preset, isMobile }: SceneProps) {
   const settings = useGardenStore((s) => s.settings);
   const colors = PRESETS[preset].colors;
   const groupRef = useRef<THREE.Group>(null);
@@ -43,6 +44,9 @@ export default function Scene({ audioData, preset }: SceneProps) {
     average: audioData.average * settings.sensitivity,
   }), [audioData, settings.sensitivity]);
 
+  // Reduce particle counts on mobile for performance
+  const mobileParticleAmount = isMobile ? settings.particleAmount * 0.5 : settings.particleAmount;
+
   return (
     <group ref={groupRef}>
       <ambientLight intensity={0.15} color={colors.primary} />
@@ -61,9 +65,9 @@ export default function Scene({ audioData, preset }: SceneProps) {
       <Roots audioData={scaled} color={colors.primary} />
       <GardenPlants audioData={scaled} colors={colors} />
       <Flowers audioData={scaled} colors={colors} />
-      <Pollen amount={settings.particleAmount} audioData={scaled} color={colors.accent} />
+      <Pollen amount={mobileParticleAmount} audioData={scaled} color={colors.accent} />
       <Butterflies audioData={scaled} color={colors.accent} />
-      <Atmosphere color={colors.background} />
+      <Atmosphere color={colors.background} isMobile={isMobile} />
     </group>
   );
 }

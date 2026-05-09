@@ -1,4 +1,4 @@
-import { useEffect, Suspense, useRef } from 'react';
+import { useEffect, Suspense, useRef, useState, useCallback } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import { useGardenStore } from './store';
@@ -15,6 +15,23 @@ function App() {
   const setIsPlaying = useGardenStore((s) => s.setIsPlaying);
   const { startFile, startMicrophone, startDemo, stop, audioData } = useAudioEngine();
   const initialized = useRef(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [dpr, setDpr] = useState<[number, number]>([1, 1.5]);
+
+  // Detect mobile and adjust DPR for performance
+  useEffect(() => {
+    const checkMobile = () => {
+      const mobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+        navigator.userAgent
+      ) || window.innerWidth < 768;
+      setIsMobile(mobile);
+      // Lower DPR on mobile for better performance
+      setDpr(mobile ? [1, 1.2] : [1, 1.5]);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Auto-start demo on first load
   useEffect(() => {
@@ -41,18 +58,40 @@ function App() {
     }
   }, [audioSource, isPlaying, startDemo]);
 
+  // Unlock audio context on first user interaction (critical for mobile)
+  const unlockAudio = useCallback(() => {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    if (ctx.state === 'suspended') {
+      ctx.resume();
+    }
+  }, []);
+
   return (
-    <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#020205' }}>
+    <div
+      style={{
+        width: '100%',
+        height: '100dvh',
+        position: 'relative',
+        background: '#020205',
+        overflow: 'hidden',
+      }}
+      onTouchStart={unlockAudio}
+      onClick={unlockAudio}
+    >
       <Canvas
-        camera={{ position: [0, 4, 12], fov: 55, near: 0.1, far: 200 }}
-        dpr={[1, 1.5]}
-        gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
+        camera={{ position: [0, 4, 12], fov: isMobile ? 65 : 55, near: 0.1, far: 200 }}
+        dpr={dpr}
+        gl={{
+          antialias: !isMobile,
+          alpha: false,
+          powerPreference: 'high-performance',
+        }}
         style={{ position: 'absolute', inset: 0 }}
       >
         <color attach="background" args={['#020205']} />
         <fog attach="fog" args={['#020205', 15, 60]} />
         <Suspense fallback={null}>
-          <Scene audioData={audioData} preset={currentPreset} />
+          <Scene audioData={audioData} preset={currentPreset} isMobile={isMobile} />
           <EffectComposer>
             <Bloom
               luminanceThreshold={0.2}
