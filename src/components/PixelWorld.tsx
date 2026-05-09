@@ -18,6 +18,7 @@ interface Cell {
   glowIntensity: number;
   x: number;
   y: number;
+  layer: number;
 }
 
 interface Particle {
@@ -31,16 +32,15 @@ interface Particle {
   maxLife: number;
   size: number;
   color: string;
-  depth: number;
 }
 
-interface Star {
+interface SketchMark {
   x: number;
   y: number;
-  size: number;
-  color: string;
-  depth: number;
-  twinkleOffset: number;
+  angle: number;
+  length: number;
+  opacity: number;
+  speed: number;
 }
 
 interface Ripple {
@@ -98,31 +98,35 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
   const frontierRef = useRef<Set<string>>(new Set());
   const particlesRef = useRef<Particle[]>([]);
   const ripplesRef = useRef<Ripple[]>([]);
-  const starsRef = useRef<Star[]>([]);
+  const sketchMarksRef = useRef<SketchMark[]>([]);
   const lastGrowRef = useRef(0);
   const timeRef = useRef(0);
   const cameraShakeRef = useRef({ x: 0, y: 0, intensity: 0 });
   const tileCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const prevKickRef = useRef(false);
+  const prevSnareRef = useRef(false);
   const kickFlashRef = useRef(0);
-  const chromaticRef = useRef(0);
+  const totalCellsRef = useRef(0);
+  const layerRef = useRef(0);
+  const currentBiomeRef = useRef<BiomeName>('garden');
 
   const currentBiome = useGardenStore((s) => s.currentBiome);
+  const worldVersion = useGardenStore((s) => s.worldVersion);
   const isPlaying = useGardenStore((s) => s.isPlaying);
   const settings = useGardenStore((s) => s.settings);
 
-  // Init grid + stars
+  // Init or reset grid
   useEffect(() => {
     const grid: Cell[][] = [];
     for (let y = 0; y < GRID_SIZE; y++) {
       grid[y] = [];
       for (let x = 0; x < GRID_SIZE; x++) {
-        grid[y][x] = { type: -1, age: 0, variation: Math.random(), flash: 0, pulseHeight: 0, glowIntensity: 0, x, y };
+        grid[y][x] = { type: -1, age: 0, variation: Math.random(), flash: 0, pulseHeight: 0, glowIntensity: 0, x, y, layer: 0 };
       }
     }
     const cx = Math.floor(GRID_SIZE / 2);
     const cy = Math.floor(GRID_SIZE / 2);
-    grid[cy][cx] = { type: 0, age: 1, variation: Math.random(), flash: 1, pulseHeight: 0, glowIntensity: 0, x: cx, y: cy };
+    grid[cy][cx] = { type: 0, age: 1, variation: Math.random(), flash: 1, pulseHeight: 0, glowIntensity: 0, x: cx, y: cy, layer: 0 };
 
     const frontier = new Set<string>();
     getNeighbors(cx, cy).forEach(([nx, ny]) => frontier.add(`${nx},${ny}`));
@@ -136,23 +140,46 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
     cameraShakeRef.current = { x: 0, y: 0, intensity: 0 };
     tileCacheRef.current.clear();
     prevKickRef.current = false;
+    prevSnareRef.current = false;
     kickFlashRef.current = 0;
-    chromaticRef.current = 0;
+    totalCellsRef.current = 1;
+    layerRef.current = 0;
+    currentBiomeRef.current = currentBiome;
 
-    // Generate starfield
-    const biome = BIOMES[currentBiome];
-    const stars: Star[] = [];
-    for (let i = 0; i < 80; i++) {
-      stars.push({
+    // Generate sketch marks
+    const marks: SketchMark[] = [];
+    for (let i = 0; i < 60; i++) {
+      marks.push({
         x: Math.random(),
         y: Math.random(),
-        size: 0.5 + Math.random() * 2,
-        color: biome.starColors[Math.floor(Math.random() * biome.starColors.length)],
-        depth: 0.1 + Math.random() * 0.9,
-        twinkleOffset: Math.random() * Math.PI * 2,
+        angle: Math.random() * Math.PI * 2,
+        length: 20 + Math.random() * 60,
+        opacity: 0.03 + Math.random() * 0.06,
+        speed: 0.2 + Math.random() * 0.5,
       });
     }
-    starsRef.current = stars;
+    sketchMarksRef.current = marks;
+  }, [worldVersion]); // Only reset on explicit reset, not biome switch
+
+  // Handle biome switch: remap tiles, clear cache, keep grid
+  useEffect(() => {
+    if (currentBiome === currentBiomeRef.current) return;
+    
+    const grid = gridRef.current;
+    const newTiles = BIOMES[currentBiome].tiles;
+    
+    // Remap existing cells to new biome tile indices
+    for (let y = 0; y < GRID_SIZE; y++) {
+      for (let x = 0; x < GRID_SIZE; x++) {
+        const cell = grid[y][x];
+        if (cell.type !== -1) {
+          cell.type = Math.min(cell.type, newTiles.length - 1);
+        }
+      }
+    }
+    
+    currentBiomeRef.current = currentBiome;
+    tileCacheRef.current.clear();
   }, [currentBiome]);
 
   const spawnParticles = useCallback((wx: number, wy: number, wz: number, biome: BiomeName, count: number) => {
@@ -167,7 +194,6 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
         maxLife: 0.5 + Math.random() * 1.2,
         size: 1.5 + Math.random() * 2.5,
         color: b.particleColor,
-        depth: Math.random(),
       });
     }
   }, []);
@@ -194,7 +220,7 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
     if (face === 'left') {
       baseColor = shColor;
       hlColor = tile.color;
-      shColor = '#00000022';
+      shColor = 'rgba(0,0,0,0.15)';
     } else if (face === 'right') {
       baseColor = tile.color;
       hlColor = hlColor;
@@ -236,34 +262,32 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
       const tiles = biome.tiles;
       const shake = cameraShakeRef.current;
       const prevKick = prevKickRef.current;
+      const prevSnare = prevSnareRef.current;
 
-      const { sensitivity, kickReactivity, animationSpeed } = settings;
+      const { sensitivity, kickReactivity, snareReactivity, animationSpeed } = settings;
 
-      // Detect kick edge (rising)
+      // Detect edges
       const kickEdge = audioData.kick && !prevKick;
+      const snareEdge = audioData.snare && !prevSnare;
       prevKickRef.current = audioData.kick;
+      prevSnareRef.current = audioData.snare;
 
-      // === KICK REACTIONS (ONLY) ===
+      // === KICK REACTIONS ===
       if (kickEdge) {
         shake.intensity = Math.min(shake.intensity + audioData.kickEnergy * 12 * kickReactivity, 10);
-        kickFlashRef.current = Math.max(kickFlashRef.current, audioData.kickEnergy * 0.4 * kickReactivity);
-        chromaticRef.current = Math.max(chromaticRef.current, audioData.kickEnergy * 0.08 * kickReactivity);
+        kickFlashRef.current = Math.max(kickFlashRef.current, audioData.kickEnergy * 0.25 * kickReactivity);
 
-        // Pulse ALL cells with delay from center
         for (let y = 0; y < GRID_SIZE; y++) {
           for (let x = 0; x < GRID_SIZE; x++) {
             const cell = grid[y][x];
             if (cell.type !== -1) {
               const distFromCenter = Math.sqrt((x - GRID_SIZE/2)**2 + (y - GRID_SIZE/2)**2);
-              const delay = distFromCenter * 0.025;
-              setTimeout(() => {
-                cell.pulseHeight = Math.max(cell.pulseHeight, audioData.kickEnergy * kickReactivity * (1 - delay * 0.15));
-              }, delay * 100);
+              const delay = distFromCenter * 0.02;
+              cell.pulseHeight = Math.max(cell.pulseHeight, audioData.kickEnergy * kickReactivity * Math.max(0, 1 - delay * 0.2));
             }
           }
         }
 
-        // Spawn ripple
         ripplesRef.current.push({ radius: 0, intensity: audioData.kickEnergy * kickReactivity, x: GRID_SIZE/2, y: GRID_SIZE/2 });
       }
 
@@ -276,23 +300,27 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
         }
       }
       kickFlashRef.current *= 0.85;
-      chromaticRef.current *= 0.9;
 
-      // Update camera shake
+      // Update shake
       shake.intensity *= 0.88;
       shake.x = (Math.random() - 0.5) * shake.intensity;
       shake.y = (Math.random() - 0.5) * shake.intensity;
 
       // === GROWTH ===
       const totalEnergy = (audioData.bass * 1.5 + audioData.lowMids + audioData.highMids * 0.5 + audioData.treble * 0.3) * sensitivity;
-      const growAmount = totalEnergy * 0.08;
+      const growAmount = totalEnergy * 0.06;
 
       if (isPlaying && frontier.size > 0) {
         lastGrowRef.current += growAmount;
 
-        const burstCount = kickEdge ? Math.floor(2 + audioData.kickEnergy * 4 * kickReactivity) : 0;
-        const cellsToGrow = burstCount + (lastGrowRef.current >= 1 ? 1 : 0);
+        // Kick burst
+        const kickBurst = kickEdge ? Math.floor(2 + audioData.kickEnergy * 4 * kickReactivity) : 0;
+        // Snare chunk: 5-15 cells at once
+        const snareBurst = snareEdge ? Math.floor(5 + audioData.snareEnergy * 10 * snareReactivity) : 0;
+        const steadyGrow = lastGrowRef.current >= 1 ? 1 : 0;
         if (lastGrowRef.current >= 1) lastGrowRef.current -= 1;
+
+        const cellsToGrow = kickBurst + snareBurst + steadyGrow;
 
         for (let g = 0; g < cellsToGrow && frontier.size > 0; g++) {
           const frontierArray = Array.from(frontier);
@@ -314,8 +342,9 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
             type: typeIdx, age: 1, variation: Math.random(), flash: 1,
             pulseHeight: kickEdge ? audioData.kickEnergy * kickReactivity * 0.5 : 0,
             glowIntensity: 0,
-            x: fx, y: fy,
+            x: fx, y: fy, layer: layerRef.current,
           };
+          totalCellsRef.current++;
 
           if (typeIdx >= 2) {
             const tile = tiles[typeIdx];
@@ -328,7 +357,30 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
         }
       }
 
-      // Update cell ages
+      // === INFINITE LOOP: Auto-reset when grid is ~75% full ===
+      const filledCells = totalCellsRef.current;
+      const totalCells = GRID_SIZE * GRID_SIZE;
+      if (filledCells > totalCells * 0.75) {
+        // Reset grid but keep zoom level
+        for (let y = 0; y < GRID_SIZE; y++) {
+          for (let x = 0; x < GRID_SIZE; x++) {
+            grid[y][x] = { type: -1, age: 0, variation: Math.random(), flash: 0, pulseHeight: 0, glowIntensity: 0, x, y, layer: layerRef.current + 1 };
+          }
+        }
+        const cx = Math.floor(GRID_SIZE / 2);
+        const cy = Math.floor(GRID_SIZE / 2);
+        grid[cy][cx] = { type: 0, age: 1, variation: Math.random(), flash: 1, pulseHeight: 0, glowIntensity: 0, x: cx, y: cy, layer: layerRef.current + 1 };
+        
+        frontier.clear();
+        getNeighbors(cx, cy).forEach(([nx, ny]) => frontier.add(`${nx},${ny}`));
+        
+        layerRef.current++;
+        totalCellsRef.current = 1;
+        lastGrowRef.current = 0;
+        ripplesRef.current = [];
+      }
+
+      // Update ages
       for (let y = 0; y < GRID_SIZE; y++) {
         for (let x = 0; x < GRID_SIZE; x++) {
           const cell = grid[y][x];
@@ -361,8 +413,7 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
       }
 
       // Ambient particles
-      if (Math.random() < 0.06 * sensitivity) {
-        const b = BIOMES[currentBiome];
+      if (Math.random() < 0.04 * sensitivity) {
         particles.push({
           x: (Math.random() - 0.5) * GRID_SIZE,
           y: (Math.random() - 0.5) * GRID_SIZE,
@@ -373,8 +424,7 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
           life: 2 + Math.random() * 2,
           maxLife: 3,
           size: 1 + Math.random(),
-          color: b.particleColor,
-          depth: Math.random(),
+          color: biome.particleColor,
         });
       }
 
@@ -389,52 +439,46 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
       }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-      // Sky with frequency reactivity
-      const skyGrad = ctx.createLinearGradient(0, 0, 0, displayH);
-      const bassWarmth = Math.floor(audioData.bass * 25);
-      const trebleCool = Math.floor(audioData.treble * 15);
-      skyGrad.addColorStop(0, shiftColor(biome.skyGradient[0], bassWarmth, 0, -trebleCool));
-      skyGrad.addColorStop(0.5, shiftColor(biome.skyGradient[1], bassWarmth * 0.5, 0, -trebleCool * 0.5));
-      skyGrad.addColorStop(1, shiftColor(biome.skyGradient[2], 0, 0, -trebleCool));
-      ctx.fillStyle = skyGrad;
+      // Sketch background
+      ctx.fillStyle = biome.bgColor;
       ctx.fillRect(0, 0, displayW, displayH);
 
-      // Starfield with parallax
-      const stars = starsRef.current;
-      for (const star of stars) {
-        const twinkle = Math.sin(t * 2 + star.twinkleOffset) * 0.5 + 0.5;
-        const alpha = twinkle * star.depth;
-        const sx = star.x * displayW + shake.x * star.depth * 0.5;
-        const sy = star.y * displayH + shake.y * star.depth * 0.5;
-        ctx.globalAlpha = alpha * 0.7;
-        ctx.fillStyle = star.color;
-        ctx.fillRect(sx, sy, star.size, star.size);
+      // Subtle cross-hatch background pattern
+      ctx.globalAlpha = 0.015;
+      ctx.strokeStyle = biome.sketchColor;
+      ctx.lineWidth = 0.5;
+      const hatchSpacing = 40;
+      for (let i = -displayH; i < displayW + displayH; i += hatchSpacing) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0);
+        ctx.lineTo(i + displayH, displayH);
+        ctx.stroke();
       }
       ctx.globalAlpha = 1;
 
-      // Isometric projection
-      const diamondW = GRID_SIZE;
-      const tileW = Math.min(displayW / (diamondW * 1.05), displayH / (diamondW * 0.6)) * 1.0;
+      // Floating sketch marks
+      const marks = sketchMarksRef.current;
+      for (const mark of marks) {
+        const mx = (mark.x * displayW + t * mark.speed * 20) % (displayW + 100) - 50 + shake.x * 0.3;
+        const my = mark.y * displayH + shake.y * 0.3;
+        const twinkle = Math.sin(t * mark.speed + mark.x * 10) * 0.5 + 0.5;
+        ctx.globalAlpha = mark.opacity * twinkle;
+        ctx.strokeStyle = biome.sketchColor;
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(mx, my);
+        ctx.lineTo(mx + Math.cos(mark.angle) * mark.length, my + Math.sin(mark.angle) * mark.length);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+
+      // Dynamic camera zoom: tiles shrink as world grows
+      const zoomFactor = 1 / (1 + totalCellsRef.current / 150 + layerRef.current * 0.3);
+      const baseTileW = Math.min(displayW / (GRID_SIZE * 1.05), displayH / (GRID_SIZE * 0.6)) * 1.0;
+      const tileW = baseTileW * Math.max(0.25, zoomFactor);
       const tileH = tileW * 0.5;
       const centerX = displayW / 2 + shake.x;
       const centerY = displayH / 2 + shake.y + tileH * 2;
-
-      // Ground reflection pattern (reacts to bass)
-      const groundAlpha = audioData.bass * 0.08 + 0.02;
-      ctx.fillStyle = biome.voidColor;
-      ctx.globalAlpha = groundAlpha;
-      for (let y = 0; y < GRID_SIZE; y++) {
-        for (let x = 0; x < GRID_SIZE; x++) {
-          const cell = grid[y][x];
-          if (cell.type === -1) continue;
-          const sx = (x - y) * tileW / 2 + centerX;
-          const sy = (x + y) * tileH / 2 + centerY;
-          const pulse = Math.sin(t * 3 + x * 0.5 + y * 0.5) * 0.3 + 0.7;
-          ctx.fillStyle = `rgba(0,0,0,${pulse * groundAlpha})`;
-          drawIsoTile(ctx, sx, sy + tileH * 0.5, tileW * 0.9, tileH * 0.9);
-        }
-      }
-      ctx.globalAlpha = 1;
 
       // Collect visible cells
       const renderList: { cell: Cell; sx: number; sy: number }[] = [];
@@ -466,6 +510,9 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
         const drawX = sx;
         const drawY = sy - hPx + floatY;
 
+        // Layer tint (older layers get slightly desaturated)
+        const layerTint = cell.layer > 0 ? 1 - (cell.layer * 0.08) : 1;
+
         // Side faces
         if (h > 0) {
           const leftFace = getTileFace(currentBiome, cell.type, 'left');
@@ -480,6 +527,7 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
               ctx.translate(0, -hPx / 2);
             }
             ctx.transform(1, 0.5, 0, 1, 0, 0);
+            ctx.globalAlpha = layerTint;
             ctx.drawImage(leftFace, 0, -hPx, tileW / 2, hPx + tileH);
             ctx.restore();
           }
@@ -493,6 +541,7 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
               ctx.translate(0, -hPx / 2);
             }
             ctx.transform(1, -0.5, 0, 1, 0, 0);
+            ctx.globalAlpha = layerTint;
             ctx.drawImage(rightFace, 0, -hPx, tileW / 2, hPx + tileH);
             ctx.restore();
           }
@@ -511,34 +560,50 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
             ctx.rotate(Math.PI / 4);
           }
           const s = tileW / Math.SQRT2;
+          ctx.globalAlpha = layerTint;
           ctx.drawImage(topFace, -s / 2, -s / 2, s, s);
           ctx.restore();
         }
 
-        // Age darkening
+        ctx.globalAlpha = 1;
+
+        // Sketch outline (ink line)
+        ctx.strokeStyle = biome.sketchColor;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.4;
+        drawIsoTileOutline(ctx, drawX, drawY, tileW, tileH);
+        ctx.globalAlpha = 1;
+
+        // Age subtle shading
         if (cell.age > 2) {
-          const darken = Math.min((cell.age - 2) * 0.01, 0.08);
+          const darken = Math.min((cell.age - 2) * 0.008, 0.06);
           ctx.fillStyle = `rgba(0,0,0,${darken})`;
           drawIsoTile(ctx, drawX, drawY, tileW, tileH);
         }
 
-        // Flash on new growth (white, brief)
+        // Flash on new growth
         if (cell.flash > 0) {
-          ctx.fillStyle = `rgba(255,255,255,${cell.flash * 0.3})`;
+          ctx.fillStyle = `rgba(255,255,255,${cell.flash * 0.25})`;
           drawIsoTile(ctx, drawX, drawY, tileW, tileH);
         }
 
-        // Glow (subtle, from tile definition only)
-        if (tile.glow && cell.age > 0.3) {
-          const bloom = settings.bloom;
-          const idlePulse = Math.sin(t * 3 * animationSpeed + cell.variation * 10) * 0.3 + 0.7;
-          ctx.shadowColor = tile.glow;
-          ctx.shadowBlur = 10 * idlePulse * bloom;
-          ctx.fillStyle = tile.glow;
-          ctx.globalAlpha = 0.08 * idlePulse;
-          drawIsoTile(ctx, drawX, drawY, tileW * 1.05, tileH * 1.05);
-          ctx.globalAlpha = 1;
-          ctx.shadowBlur = 0;
+        // Cross-hatch shadow on side faces
+        if (h > 0.5) {
+          ctx.save();
+          ctx.globalAlpha = 0.06;
+          ctx.strokeStyle = biome.sketchColor;
+          ctx.lineWidth = 0.5;
+          for (let hLine = 0; hLine < hPx; hLine += 4) {
+            ctx.beginPath();
+            ctx.moveTo(drawX - tileW / 2, drawY - hLine);
+            ctx.lineTo(drawX, drawY - hLine + tileH / 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(drawX + tileW / 2, drawY - hLine);
+            ctx.lineTo(drawX, drawY - hLine + tileH / 2);
+            ctx.stroke();
+          }
+          ctx.restore();
         }
       }
 
@@ -554,7 +619,7 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
               const sx = (x - y) * tileW / 2 + centerX;
               const sy = (x + y) * tileH / 2 + centerY;
               const intensity = r.intensity * (1 - diff / 2.5);
-              ctx.fillStyle = `rgba(255,255,255,${intensity * 0.2})`;
+              ctx.fillStyle = `rgba(255,255,255,${intensity * 0.15})`;
               drawIsoTile(ctx, sx, sy, tileW * 1.05, tileH * 1.05);
             }
           }
@@ -568,39 +633,24 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
         const alpha = Math.max(0, p.life / p.maxLife);
         ctx.globalAlpha = alpha;
         ctx.fillStyle = p.color;
-        const ps = p.size * (1 + p.depth * 0.5);
+        const ps = p.size;
         ctx.fillRect(psx - ps / 2, psy - ps / 2, ps, ps);
       }
       ctx.globalAlpha = 1;
 
-      // === SCREEN EFFECTS ===
-
-      // Kick flash (subtle white)
+      // Kick flash (subtle)
       if (kickFlashRef.current > 0.01) {
         ctx.fillStyle = `rgba(255,255,255,${kickFlashRef.current})`;
         ctx.fillRect(0, 0, displayW, displayH);
       }
 
-      // Chromatic aberration on strong kicks
-      if (chromaticRef.current > 0.01) {
-        const ch = chromaticRef.current;
-        ctx.globalCompositeOperation = 'screen';
-        ctx.globalAlpha = ch * 0.5;
-        ctx.drawImage(canvas, -ch * 20, 0, displayW + ch * 40, displayH);
-        ctx.globalAlpha = ch * 0.3;
-        ctx.drawImage(canvas, ch * 15, 0, displayW - ch * 30, displayH);
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.globalAlpha = 1;
-      }
-
-      // Bass-reactive vignette
+      // Sketch vignette
       const vigGrad = ctx.createRadialGradient(
-        displayW / 2, displayH / 2, displayW * 0.2 + audioData.bass * displayW * 0.1,
-        displayW / 2, displayH / 2, displayW * 0.75 + audioData.average * displayW * 0.05
+        displayW / 2, displayH / 2, displayW * 0.3,
+        displayW / 2, displayH / 2, displayW * 0.75
       );
-      const vigDark = 0.35 + audioData.bass * 0.15;
       vigGrad.addColorStop(0, 'rgba(0,0,0,0)');
-      vigGrad.addColorStop(1, `rgba(0,0,0,${vigDark})`);
+      vigGrad.addColorStop(1, 'rgba(42,37,32,0.12)');
       ctx.fillStyle = vigGrad;
       ctx.fillRect(0, 0, displayW, displayH);
 
@@ -609,7 +659,7 @@ export default function PixelWorld({ audioData }: PixelWorldProps) {
 
     animId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animId);
-  }, [currentBiome, isPlaying, audioData, settings, spawnParticles, getTileFace]);
+  }, [currentBiome, worldVersion, isPlaying, audioData, settings, spawnParticles, getTileFace]);
 
   return (
     <canvas
@@ -636,10 +686,12 @@ function drawIsoTile(ctx: CanvasRenderingContext2D, cx: number, cy: number, w: n
   ctx.fill();
 }
 
-function shiftColor(hex: string, rShift: number, gShift: number, bShift: number): string {
-  const num = parseInt(hex.slice(1), 16);
-  let r = Math.max(0, Math.min(255, (num >> 16) + rShift));
-  let g = Math.max(0, Math.min(255, ((num >> 8) & 0xff) + gShift));
-  let b = Math.max(0, Math.min(255, (num & 0xff) + bShift));
-  return `rgb(${r},${g},${b})`;
+function drawIsoTileOutline(ctx: CanvasRenderingContext2D, cx: number, cy: number, w: number, h: number) {
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - h);
+  ctx.lineTo(cx + w / 2, cy);
+  ctx.lineTo(cx, cy + h);
+  ctx.lineTo(cx - w / 2, cy);
+  ctx.closePath();
+  ctx.stroke();
 }

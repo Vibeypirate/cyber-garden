@@ -11,6 +11,7 @@ function App() {
   const setIsPlaying = useGardenStore((s) => s.setIsPlaying);
   const setCurrentSong = useGardenStore((s) => s.setCurrentSong);
   const setAudioSource = useGardenStore((s) => s.setAudioSource);
+  const resetWorld = useGardenStore((s) => s.resetWorld);
 
   const { startFile, startMicrophone, startDemo, pause, resumeAudio, stop, audioData, resumeContext, isUploading } = useAudioEngine();
   const initialized = useRef(false);
@@ -38,7 +39,8 @@ function App() {
     setIsPlaying(false);
     setAudioSource(null);
     setCurrentSong(null);
-  }, [stop, setIsPlaying, setAudioSource, setCurrentSong]);
+    resetWorld();
+  }, [stop, setIsPlaying, setAudioSource, setCurrentSong, resetWorld]);
 
   const handleUpload = useCallback(async (file: File) => {
     setAudioSource('file');
@@ -65,7 +67,7 @@ function App() {
         width: '100%',
         height: '100dvh',
         position: 'relative',
-        background: '#020205',
+        background: '#f5f0e8',
         overflow: 'hidden',
       }}
       onTouchStart={unlockAudio}

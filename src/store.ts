@@ -12,6 +12,7 @@ interface GardenState {
   posterTitle: string;
   posterArtist: string;
   error: string | null;
+  worldVersion: number;
 
   setAudioSource: (source: import('./types').AudioSource) => void;
   setIsPlaying: (playing: boolean) => void;
@@ -21,6 +22,7 @@ interface GardenState {
   setPosterMode: (active: boolean) => void;
   randomizePosterText: () => void;
   setError: (error: string | null) => void;
+  resetWorld: () => void;
 }
 
 function randomPoster(): { title: string; artist: string } {
@@ -42,6 +44,7 @@ export const useGardenStore = create<GardenState>((set) => ({
   posterTitle: initialPoster.title,
   posterArtist: initialPoster.artist,
   error: null,
+  worldVersion: 0,
 
   setAudioSource: (source) => set({ audioSource: source }),
   setIsPlaying: (playing) => set({ isPlaying: playing }),
@@ -55,4 +58,5 @@ export const useGardenStore = create<GardenState>((set) => ({
     set({ posterTitle: p.title, posterArtist: p.artist });
   },
   setError: (error) => set({ error }),
+  resetWorld: () => set((state) => ({ worldVersion: state.worldVersion + 1 })),
 }));

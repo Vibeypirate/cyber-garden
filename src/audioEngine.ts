@@ -7,7 +7,7 @@ export class AudioEngine {
   private gainNode: GainNode | null = null;
   private dataArray: Uint8Array = new Uint8Array(0);
   private smoothData: AudioData = { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0, kick: false, snare: false, kickEnergy: 0, snareEnergy: 0 };
-  private smoothing = 0.65;
+  private smoothing = 0.55;
   private isPlaying = false;
   private isSuspended = false;
   private demoOscillators: OscillatorNode[] = [];
@@ -15,11 +15,12 @@ export class AudioEngine {
   private currentMode: 'file' | 'microphone' | 'demo' | null = null;
   private lastFile: File | null = null;
 
-  // Beat detection: ring buffers (history EXCLUDES current frame)
-  private bassHistory: number[] = new Array(40).fill(0);
-  private bassFluxHistory: number[] = new Array(20).fill(0); // spectral flux
+  // Beat detection: dedicated 0-30Hz sub-bass detection
+  private subBassHistory: number[] = new Array(30).fill(0);
+  private subBassFluxHistory: number[] = new Array(15).fill(0);
+  private snareHistory: number[] = new Array(20).fill(0);
   private historyIdx = 0;
-  private prevBass = 0;
+  private prevSubBass = 0;
   private kickCooldown = 0;
   private snareCooldown = 0;
 
@@ -48,8 +49,11 @@ export class AudioEngine {
     const ctx = this.getContext();
     if (!this.analyser) {
       this.analyser = ctx.createAnalyser();
-      this.analyser.fftSize = 2048;
-      this.analyser.smoothingTimeConstant = 0.25; // lower = more responsive
+      // 8192 FFT = 4096 bins. At 44.1kHz, each bin is ~5.38Hz wide.
+      // Bin 0 = 0-5.38Hz, Bin 1 = 5.38-10.76Hz, ... Bin 5 = 26.91-32.29Hz
+      // This gives us precise 0-30Hz sub-bass detection.
+      this.analyser.fftSize = 8192;
+      this.analyser.smoothingTimeConstant = 0.15;
       const bufferLength = this.analyser.frequencyBinCount;
       this.dataArray = new Uint8Array(bufferLength);
     }
@@ -76,64 +80,69 @@ export class AudioEngine {
       return count > 0 ? sum / count / 255 : 0;
     };
 
-    const bass = getBand(20, 100);       // Pure kick zone
-    const lowMids = getBand(100, 400);    // Bass guitar/body
-    const highMids = getBand(400, 5000);  // Snare/vocals
-    const treble = getBand(5000, 15000);  // Hihats/cymbals
-    const average = (bass + lowMids + highMids + treble) / 4;
+    // 0-30Hz = true sub-bass / kick drum fundamental
+    const subBass = getBand(0, 30);
+    // 30-120Hz = bass body
+    const bass = getBand(30, 120);
+    // 120-500Hz = low mids
+    const lowMids = getBand(120, 500);
+    // 500-5000Hz = snare / clap / vocals
+    const highMids = getBand(500, 5000);
+    // 5-15kHz = treble
+    const treble = getBand(5000, 15000);
+    const average = (subBass + bass + lowMids + highMids + treble) / 5;
 
-    return { bass, lowMids, highMids, treble, average };
+    return { bass: subBass, lowMids, highMids, treble, average };
   }
 
   private detectBeats(raw: { bass: number; highMids: number }): { kick: boolean; snare: boolean; kickEnergy: number; snareEnergy: number } {
-    // === SPECTRAL FLUX (onset detection) ===
-    // Flux = max(0, current - previous)  -- only rising edges
-    const bassFlux = Math.max(0, raw.bass - this.prevBass);
-    this.prevBass = raw.bass;
+    // === SUB-BASS FLUX (0-30Hz onset detection) ===
+    const subBassFlux = Math.max(0, raw.bass - this.prevSubBass);
+    this.prevSubBass = raw.bass;
 
-    // Store current bass in history (for average computation)
-    // History buffer is 40 frames, does NOT include current
-    this.bassHistory[this.historyIdx] = raw.bass;
-    this.bassFluxHistory[this.historyIdx % 20] = bassFlux;
-    this.historyIdx = (this.historyIdx + 1) % 40;
+    this.subBassHistory[this.historyIdx % 30] = raw.bass;
+    this.subBassFluxHistory[this.historyIdx % 15] = subBassFlux;
+    this.snareHistory[this.historyIdx % 20] = raw.highMids;
+    this.historyIdx = (this.historyIdx + 1);
 
     // Decay cooldowns
     this.kickCooldown = Math.max(0, this.kickCooldown - 1);
     this.snareCooldown = Math.max(0, this.snareCooldown - 1);
 
-    // === COMPUTE AVERAGES FROM HISTORY ONLY ===
-    let bassSum = 0, fluxSum = 0;
-    for (let i = 0; i < 40; i++) bassSum += this.bassHistory[i];
-    for (let i = 0; i < 20; i++) fluxSum += this.bassFluxHistory[i];
-    const bassAvg = bassSum / 40;
-    const fluxAvg = fluxSum / 20;
+    // === COMPUTE AVERAGES ===
+    let subSum = 0, fluxSum = 0, snareSum = 0;
+    for (let i = 0; i < 30; i++) subSum += this.subBassHistory[i];
+    for (let i = 0; i < 15; i++) fluxSum += this.subBassFluxHistory[i];
+    for (let i = 0; i < 20; i++) snareSum += this.snareHistory[i];
+    const subAvg = subSum / 30;
+    const fluxAvg = fluxSum / 15;
+    const snareAvg = snareSum / 20;
 
-    // === KICK DETECTION (onset-based) ===
+    // === KICK DETECTION (0-30Hz sub-bass onset) ===
     let kick = false;
     let kickEnergy = 0;
-    if (this.kickCooldown === 0 && raw.bass > 0.1) {
-      // Two conditions must BOTH be met:
-      // 1. Bass is significantly above recent average (loud enough)
-      // 2. Spectral flux is significantly above recent average (sudden onset)
-      const bassThreshold = bassAvg * 1.5 + 0.06;
-      const fluxThreshold = fluxAvg * 2.0 + 0.04;
+    if (this.kickCooldown === 0) {
+      // Very sensitive: sub-bass just needs to spike above average
+      // The 0-30Hz band is almost exclusively kick drums
+      const subThreshold = subAvg * 1.3 + 0.03;
+      const fluxThreshold = fluxAvg * 1.5 + 0.02;
 
-      if (raw.bass > bassThreshold && bassFlux > fluxThreshold) {
+      if (raw.bass > subThreshold && subBassFlux > fluxThreshold) {
         kick = true;
-        kickEnergy = Math.min(1, raw.bass * 1.5 + bassFlux * 3);
-        this.kickCooldown = 6; // ~100ms at 60fps
+        kickEnergy = Math.min(1, raw.bass * 2 + subBassFlux * 4);
+        this.kickCooldown = 4; // ~67ms - tighter for faster songs
       }
     }
 
-    // === SNARE DETECTION (keep but don't use for visuals) ===
+    // === SNARE/CLAP DETECTION (500-5000Hz onset) ===
     let snare = false;
     let snareEnergy = 0;
     if (this.snareCooldown === 0) {
-      const snareThreshold = bassAvg * 0.8 + 0.15; // snare lives in upper mids
-      if (raw.highMids > snareThreshold && raw.highMids > 0.2) {
+      const snareThreshold = snareAvg * 1.4 + 0.08;
+      if (raw.highMids > snareThreshold && raw.highMids > 0.15) {
         snare = true;
-        snareEnergy = Math.min(1, raw.highMids);
-        this.snareCooldown = 5;
+        snareEnergy = Math.min(1, raw.highMids * 1.5);
+        this.snareCooldown = 4;
       }
     }
 
@@ -324,10 +333,11 @@ export class AudioEngine {
   }
 
   private _resetHistory() {
-    this.bassHistory.fill(0);
-    this.bassFluxHistory.fill(0);
+    this.subBassHistory.fill(0);
+    this.subBassFluxHistory.fill(0);
+    this.snareHistory.fill(0);
     this.historyIdx = 0;
-    this.prevBass = 0;
+    this.prevSubBass = 0;
     this.kickCooldown = 0;
     this.snareCooldown = 0;
   }
