@@ -1,0 +1,331 @@
+@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800&family=Rajdhani:wght@300;400;600&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #020205;
+  color: #e0e0ff;
+  font-family: 'Rajdhani', sans-serif;
+}
+
+canvas {
+  display: block;
+}
+
+.ui-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.ui-panel {
+  pointer-events: auto;
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  width: 320px;
+  background: rgba(5, 5, 15, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  border-radius: 16px;
+  padding: 20px;
+  box-shadow: 0 0 40px rgba(0, 240, 255, 0.08), inset 0 0 20px rgba(0, 240, 255, 0.03);
+  transition: opacity 0.4s ease, transform 0.4s ease;
+}
+
+.ui-panel.hidden {
+  opacity: 0;
+  transform: translateX(20px);
+  pointer-events: none;
+}
+
+.ui-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #00f0ff;
+  text-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
+  margin-bottom: 4px;
+  letter-spacing: 1px;
+}
+
+.ui-subtitle {
+  font-size: 0.8rem;
+  color: rgba(200, 200, 255, 0.5);
+  margin-bottom: 16px;
+  font-weight: 300;
+}
+
+.ui-section {
+  margin-bottom: 14px;
+}
+
+.ui-label {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: rgba(150, 150, 220, 0.7);
+  margin-bottom: 6px;
+  display: block;
+}
+
+.ui-btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ui-btn {
+  background: rgba(0, 240, 255, 0.08);
+  border: 1px solid rgba(0, 240, 255, 0.2);
+  color: #a0f0ff;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  pointer-events: auto;
+}
+
+.ui-btn:hover {
+  background: rgba(0, 240, 255, 0.18);
+  border-color: rgba(0, 240, 255, 0.5);
+  box-shadow: 0 0 15px rgba(0, 240, 255, 0.15);
+}
+
+.ui-btn:active {
+  transform: scale(0.97);
+}
+
+.ui-btn.active {
+  background: rgba(0, 240, 255, 0.25);
+  border-color: rgba(0, 240, 255, 0.6);
+  box-shadow: 0 0 20px rgba(0, 240, 255, 0.2);
+}
+
+.ui-btn.danger {
+  border-color: rgba(255, 0, 100, 0.3);
+  color: #ff5599;
+}
+
+.ui-btn.danger:hover {
+  background: rgba(255, 0, 100, 0.12);
+  border-color: rgba(255, 0, 100, 0.5);
+}
+
+.ui-slider {
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 2px;
+  outline: none;
+  margin: 6px 0;
+}
+
+.ui-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #00f0ff;
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+  cursor: pointer;
+}
+
+.ui-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #00f0ff;
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.5);
+  cursor: pointer;
+  border: none;
+}
+
+.preset-btn {
+  flex: 1;
+  min-width: 60px;
+  text-align: center;
+  padding: 6px 8px;
+  font-size: 0.75rem;
+}
+
+.error-toast {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 30, 80, 0.15);
+  border: 1px solid rgba(255, 30, 80, 0.4);
+  color: #ff88aa;
+  padding: 10px 24px;
+  border-radius: 12px;
+  backdrop-filter: blur(8px);
+  font-size: 0.9rem;
+  animation: fadeInUp 0.4s ease;
+}
+
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateX(-50%) translateY(10px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.poster-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(2, 2, 5, 0.4);
+  z-index: 20;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+
+.poster-overlay.active {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.poster-frame {
+  width: 500px;
+  max-width: 90vw;
+  aspect-ratio: 1;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-radius: 8px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 0 80px rgba(0, 240, 255, 0.1);
+  background: rgba(2, 2, 8, 0.3);
+}
+
+.poster-content {
+  position: absolute;
+  bottom: 40px;
+  left: 40px;
+  right: 40px;
+  text-align: center;
+}
+
+.poster-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 2rem;
+  font-weight: 800;
+  color: #ffffff;
+  text-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+  margin-bottom: 8px;
+  letter-spacing: 2px;
+}
+
+.poster-artist {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 1rem;
+  font-weight: 300;
+  color: rgba(200, 200, 255, 0.6);
+  letter-spacing: 4px;
+  text-transform: uppercase;
+}
+
+.poster-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(255, 255, 255, 0.6);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  transition: all 0.2s;
+  pointer-events: auto;
+}
+
+.poster-close:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fff;
+}
+
+.poster-actions {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  display: flex;
+  gap: 8px;
+}
+
+.poster-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: rgba(200, 200, 255, 0.8);
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 0.75rem;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: all 0.2s;
+}
+
+.poster-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.ui-toggle {
+  position: absolute;
+  top: 20px;
+  left: 20px;
+  background: rgba(5, 5, 15, 0.7);
+  border: 1px solid rgba(0, 240, 255, 0.15);
+  color: #00f0ff;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.2rem;
+  backdrop-filter: blur(8px);
+  pointer-events: auto;
+  transition: all 0.2s;
+  z-index: 15;
+}
+
+.ui-toggle:hover {
+  background: rgba(0, 240, 255, 0.12);
+  border-color: rgba(0, 240, 255, 0.4);
+}
+
+@media (max-width: 640px) {
+  .ui-panel {
+    width: calc(100vw - 40px);
+    right: 20px;
+    left: 20px;
+    top: 70px;
+  }
+  .poster-frame {
+    width: 90vw;
+  }
+}
