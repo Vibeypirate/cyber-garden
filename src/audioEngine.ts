@@ -7,7 +7,7 @@ export class AudioEngine {
   private gainNode: GainNode | null = null;
   private dataArray: Uint8Array = new Uint8Array(0);
   private smoothData: AudioData = { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0, kick: false, snare: false, kickEnergy: 0, snareEnergy: 0 };
-  private smoothing = 0.78;
+  private smoothing = 0.65;
   private isPlaying = false;
   private isSuspended = false;
   private demoOscillators: OscillatorNode[] = [];
@@ -15,10 +15,11 @@ export class AudioEngine {
   private currentMode: 'file' | 'microphone' | 'demo' | null = null;
   private lastFile: File | null = null;
 
-  // Beat detection history ring buffers
-  private bassHistory: number[] = new Array(20).fill(0);
-  private snareHistory: number[] = new Array(20).fill(0);
+  // Beat detection: ring buffers (history EXCLUDES current frame)
+  private bassHistory: number[] = new Array(40).fill(0);
+  private bassFluxHistory: number[] = new Array(20).fill(0); // spectral flux
   private historyIdx = 0;
+  private prevBass = 0;
   private kickCooldown = 0;
   private snareCooldown = 0;
 
@@ -48,7 +49,7 @@ export class AudioEngine {
     if (!this.analyser) {
       this.analyser = ctx.createAnalyser();
       this.analyser.fftSize = 2048;
-      this.analyser.smoothingTimeConstant = 0.4;
+      this.analyser.smoothingTimeConstant = 0.25; // lower = more responsive
       const bufferLength = this.analyser.frequencyBinCount;
       this.dataArray = new Uint8Array(bufferLength);
     }
@@ -75,58 +76,64 @@ export class AudioEngine {
       return count > 0 ? sum / count / 255 : 0;
     };
 
-    const bass = getBand(20, 120);      // Kick/808 zone
-    const lowMids = getBand(120, 500);   // Bass guitar
-    const highMids = getBand(500, 4000); // Snare/vocals
-    const treble = getBand(4000, 12000); // Hihats/cymbals
+    const bass = getBand(20, 100);       // Pure kick zone
+    const lowMids = getBand(100, 400);    // Bass guitar/body
+    const highMids = getBand(400, 5000);  // Snare/vocals
+    const treble = getBand(5000, 15000);  // Hihats/cymbals
     const average = (bass + lowMids + highMids + treble) / 4;
 
     return { bass, lowMids, highMids, treble, average };
   }
 
   private detectBeats(raw: { bass: number; highMids: number }): { kick: boolean; snare: boolean; kickEnergy: number; snareEnergy: number } {
-    // Update history buffers
+    // === SPECTRAL FLUX (onset detection) ===
+    // Flux = max(0, current - previous)  -- only rising edges
+    const bassFlux = Math.max(0, raw.bass - this.prevBass);
+    this.prevBass = raw.bass;
+
+    // Store current bass in history (for average computation)
+    // History buffer is 40 frames, does NOT include current
     this.bassHistory[this.historyIdx] = raw.bass;
-    this.snareHistory[this.historyIdx] = raw.highMids;
-    this.historyIdx = (this.historyIdx + 1) % 20;
+    this.bassFluxHistory[this.historyIdx % 20] = bassFlux;
+    this.historyIdx = (this.historyIdx + 1) % 40;
 
     // Decay cooldowns
     this.kickCooldown = Math.max(0, this.kickCooldown - 1);
     this.snareCooldown = Math.max(0, this.snareCooldown - 1);
 
-    // Compute average of last 12 samples (excluding current)
-    let bassSum = 0, snareSum = 0;
-    for (let i = 0; i < 20; i++) {
-      bassSum += this.bassHistory[i];
-      snareSum += this.snareHistory[i];
-    }
-    const bassAvg = bassSum / 20;
-    const snareAvg = snareSum / 20;
+    // === COMPUTE AVERAGES FROM HISTORY ONLY ===
+    let bassSum = 0, fluxSum = 0;
+    for (let i = 0; i < 40; i++) bassSum += this.bassHistory[i];
+    for (let i = 0; i < 20; i++) fluxSum += this.bassFluxHistory[i];
+    const bassAvg = bassSum / 40;
+    const fluxAvg = fluxSum / 20;
 
-    // Kick detection: current bass must be significantly above recent average
-    // AND the highest in the last few frames
+    // === KICK DETECTION (onset-based) ===
     let kick = false;
     let kickEnergy = 0;
-    if (this.kickCooldown === 0) {
-      const bassPeak = Math.max(...this.bassHistory);
-      const dynamicThreshold = bassAvg * 1.4 + 0.08;
-      if (raw.bass >= bassPeak * 0.95 && raw.bass > dynamicThreshold && raw.bass > 0.15) {
+    if (this.kickCooldown === 0 && raw.bass > 0.1) {
+      // Two conditions must BOTH be met:
+      // 1. Bass is significantly above recent average (loud enough)
+      // 2. Spectral flux is significantly above recent average (sudden onset)
+      const bassThreshold = bassAvg * 1.5 + 0.06;
+      const fluxThreshold = fluxAvg * 2.0 + 0.04;
+
+      if (raw.bass > bassThreshold && bassFlux > fluxThreshold) {
         kick = true;
-        kickEnergy = Math.min(1, raw.bass * 2);
-        this.kickCooldown = 8; // ~130ms at 60fps
+        kickEnergy = Math.min(1, raw.bass * 1.5 + bassFlux * 3);
+        this.kickCooldown = 6; // ~100ms at 60fps
       }
     }
 
-    // Snare detection: high-mid spike
+    // === SNARE DETECTION (keep but don't use for visuals) ===
     let snare = false;
     let snareEnergy = 0;
     if (this.snareCooldown === 0) {
-      const snarePeak = Math.max(...this.snareHistory);
-      const snareThreshold = snareAvg * 1.5 + 0.1;
-      if (raw.highMids >= snarePeak * 0.9 && raw.highMids > snareThreshold && raw.highMids > 0.12) {
+      const snareThreshold = bassAvg * 0.8 + 0.15; // snare lives in upper mids
+      if (raw.highMids > snareThreshold && raw.highMids > 0.2) {
         snare = true;
-        snareEnergy = Math.min(1, raw.highMids * 1.5);
-        this.snareCooldown = 6;
+        snareEnergy = Math.min(1, raw.highMids);
+        this.snareCooldown = 5;
       }
     }
 
@@ -151,7 +158,6 @@ export class AudioEngine {
 
   getAudioData(): AudioData {
     if (!this.isPlaying || !this.analyser || this.isSuspended) {
-      // Return zeros when paused — not decaying ghosts
       return { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0, kick: false, snare: false, kickEnergy: 0, snareEnergy: 0 };
     }
 
@@ -273,7 +279,6 @@ export class AudioEngine {
     if (!this.isPlaying) return;
     this.isSuspended = true;
     await this.suspendContext();
-    // Zero out smooth data immediately so visuals stop
     this.smoothData = { bass: 0, lowMids: 0, highMids: 0, treble: 0, average: 0, kick: false, snare: false, kickEnergy: 0, snareEnergy: 0 };
   }
 
@@ -320,8 +325,9 @@ export class AudioEngine {
 
   private _resetHistory() {
     this.bassHistory.fill(0);
-    this.snareHistory.fill(0);
+    this.bassFluxHistory.fill(0);
     this.historyIdx = 0;
+    this.prevBass = 0;
     this.kickCooldown = 0;
     this.snareCooldown = 0;
   }

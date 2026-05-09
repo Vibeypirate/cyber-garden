@@ -217,16 +217,12 @@ export default function UI({ onUpload, onMicrophone, onDemo, onPauseResume, onRe
               </div>
             </div>
 
-            {/* Beat indicators */}
+            {/* Beat indicator - Kick only */}
             <div className="ui-section">
               <span className="ui-label">Beat Detection</span>
               <div className="beat-indicators">
                 <div className={`beat-dot kick ${audioData.kick ? 'flash' : ''}`}>
                   <span className="beat-label">Kick</span>
-                  <div className="beat-light" />
-                </div>
-                <div className={`beat-dot snare ${audioData.snare ? 'flash' : ''}`}>
-                  <span className="beat-label">Snare</span>
                   <div className="beat-light" />
                 </div>
               </div>
