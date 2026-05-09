@@ -1,84 +1,58 @@
 import { create } from 'zustand';
-import type { GardenSettings, PresetName, AudioSource } from './types';
-import { PRESETS } from './types';
+import { DEFAULT_SETTINGS, POSTER_TITLES, POSTER_ARTISTS } from './types';
+import type { GardenSettings, BiomeName, SongInfo } from './types';
 
 interface GardenState {
-  audioSource: AudioSource;
+  audioSource: import('./types').AudioSource;
   isPlaying: boolean;
   settings: GardenSettings;
-  currentPreset: PresetName;
+  currentBiome: BiomeName;
+  currentSong: SongInfo | null;
   posterMode: boolean;
   posterTitle: string;
   posterArtist: string;
   error: string | null;
 
-  setAudioSource: (source: AudioSource) => void;
+  setAudioSource: (source: import('./types').AudioSource) => void;
   setIsPlaying: (playing: boolean) => void;
-  updateSettings: (settings: Partial<GardenSettings>) => void;
-  setPreset: (preset: PresetName) => void;
+  updateSettings: (partial: Partial<GardenSettings>) => void;
+  setBiome: (biome: BiomeName) => void;
+  setCurrentSong: (song: SongInfo | null) => void;
   setPosterMode: (active: boolean) => void;
-  setPosterTitle: (title: string) => void;
-  setPosterArtist: (artist: string) => void;
-  setError: (error: string | null) => void;
   randomizePosterText: () => void;
+  setError: (error: string | null) => void;
 }
 
-const defaultSettings: GardenSettings = {
-  sensitivity: 1.0,
-  bloom: 1.0,
-  cameraMotion: 0.5,
-  particleAmount: 0.7,
-};
+function randomPoster(): { title: string; artist: string } {
+  return {
+    title: POSTER_TITLES[Math.floor(Math.random() * POSTER_TITLES.length)],
+    artist: POSTER_ARTISTS[Math.floor(Math.random() * POSTER_ARTISTS.length)],
+  };
+}
+
+const initialPoster = randomPoster();
 
 export const useGardenStore = create<GardenState>((set) => ({
   audioSource: 'demo',
   isPlaying: true,
-  settings: { ...defaultSettings },
-  currentPreset: 'Neon Orchid',
+  settings: { ...DEFAULT_SETTINGS },
+  currentBiome: 'garden',
+  currentSong: null,
   posterMode: false,
-  posterTitle: 'Cyber Garden',
-  posterArtist: 'Unknown Artist',
+  posterTitle: initialPoster.title,
+  posterArtist: initialPoster.artist,
   error: null,
 
   setAudioSource: (source) => set({ audioSource: source }),
   setIsPlaying: (playing) => set({ isPlaying: playing }),
-  updateSettings: (settings) =>
-    set((state) => ({ settings: { ...state.settings, ...settings } })),
-  setPreset: (preset) =>
-    set((state) => {
-      const p = PRESETS[preset];
-      return {
-        currentPreset: preset,
-        settings: { ...state.settings, ...p.settings },
-      };
-    }),
+  updateSettings: (partial) =>
+    set((state) => ({ settings: { ...state.settings, ...partial } })),
+  setBiome: (biome) => set({ currentBiome: biome }),
+  setCurrentSong: (song) => set({ currentSong: song }),
   setPosterMode: (active) => set({ posterMode: active }),
-  setPosterTitle: (title) => set({ posterTitle: title }),
-  setPosterArtist: (artist) => set({ posterArtist: artist }),
-  setError: (error) => set({ error }),
   randomizePosterText: () => {
-    const titles = [
-      'Neon Roots',
-      'Digital Bloom',
-      'Synthetic Flora',
-      'Echo Garden',
-      'Pulse of Nature',
-      'Fractal Petals',
-      'Aether Vines',
-      'Luminous Seeds',
-    ];
-    const artists = [
-      'Cipher Bloom',
-      'The Algorithms',
-      'Neural Gardens',
-      'Glitch Flora',
-      'Spectral Botany',
-      'Data Seeds',
-      'Quantum Petals',
-    ];
-    set({
-      posterTitle: titles[Math.floor(Math.random() * titles.length)],
-      posterArtist: artists[Math.floor(Math.random() * artists.length)],
-    });
+    const p = randomPoster();
+    set({ posterTitle: p.title, posterArtist: p.artist });
   },
+  setError: (error) => set({ error }),
 }));

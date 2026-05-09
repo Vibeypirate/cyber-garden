@@ -12,6 +12,7 @@ export function useAudioEngine() {
     treble: 0,
     average: 0,
   });
+  const [isUploading, setIsUploading] = useState(false);
   const animationRef = useRef<number>(0);
   const { isPlaying, settings } = useGardenStore();
   const setError = useGardenStore((s) => s.setError);
@@ -51,11 +52,14 @@ export function useAudioEngine() {
   const startFile = useCallback(
     async (file: File) => {
       try {
+        setIsUploading(true);
         setError(null);
         await engineRef.current?.startFile(file);
       } catch (err) {
         setError('Failed to load audio file. Please try another.');
         console.error(err);
+      } finally {
+        setIsUploading(false);
       }
     },
     [setError]
@@ -85,5 +89,9 @@ export function useAudioEngine() {
     await engineRef.current?.stop();
   }, []);
 
-  return { audioData, startFile, startMicrophone, startDemo, stop };
+  const resumeContext = useCallback(async () => {
+    await engineRef.current?.resumeContext();
+  }, []);
+
+  return { audioData, startFile, startMicrophone, startDemo, stop, resumeContext, isUploading };
 }

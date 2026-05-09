@@ -19,11 +19,15 @@ export class AudioEngine {
     return this.ctx;
   }
 
-  async resume() {
+  async resumeContext(): Promise<void> {
     const ctx = this.getContext();
     if (ctx.state === 'suspended') {
       await ctx.resume();
     }
+  }
+
+  async resume() {
+    await this.resumeContext();
   }
 
   private setupAnalyser() {
